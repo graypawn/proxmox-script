@@ -30,5 +30,5 @@ command -v pveversion >/dev/null 2>&1 || { echo "This script must be run on the 
 
 ### 드디어 실행
 ``` bash
-tailscale up --advertise-routes=$(ip -o -4 addr show scope global | awk '{split($4,a,"/"); split(a[1],b,"."); b[4]=0; print b[1]"."b[2]"."b[3]".0/24"}') --advertise-exit-node
+tailscale up --advertise-routes=$(ip -o -4 addr show scope global | awk '{split($4,a,"/"); split(a[1],b,"."); b[4]=0; print b[1]"."b[2]"."b[3]".0/24"}')
 ```
