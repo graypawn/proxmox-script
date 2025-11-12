@@ -102,6 +102,17 @@ if [[ -f /tmp/resolv.conf.backup ]]; then
   echo "[INFO] Restoring original /etc/resolv.conf"
   mv /tmp/resolv.conf.backup /etc/resolv.conf
 fi
+
+# -----------------------------
+# Enable IP forwarding (IPv4 + IPv6)
+# -----------------------------
+echo "[INFO] Enabling IPv4 and IPv6 forwarding..."
+sed -i "s/^#\?net.ipv4.ip_forward=.*/net.ipv4.ip_forward=1/" /etc/sysctl.conf
+sed -i "s/^#\?net.ipv6.conf.all.forwarding=.*/net.ipv6.conf.all.forwarding=1/" /etc/sysctl.conf
+
+# Apply the changes immediately
+sysctl -p >/dev/null
+echo "[INFO] sysctl settings updated."
 '
 
 TAGS=$(awk -F': ' '/^tags:/ {print $2}' "$CTID_CONFIG_PATH")
