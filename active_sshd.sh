@@ -25,9 +25,9 @@ echo "[INFO] PermitRootLogin set to yes"
 
 # SSH 서비스 재시작
 if systemctl is-active --quiet sshd; then
-    sudo systemctl restart sshd
+    systemctl restart sshd
     echo "[INFO] SSH service restarted"
 else
-    sudo systemctl start sshd
+    systemctl start sshd
     echo "[INFO] SSH service started"
 fi
