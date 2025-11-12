@@ -1,123 +1,59 @@
 #!/usr/bin/env bash
-
+source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
 # Copyright (c) 2021-2025 tteck
 # Author: tteck (tteckster)
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
+# Source: https://caddyserver.com/
 
-set -Eeuo pipefail
-trap 'echo -e "\n[ERROR] in line $LINENO: exit code $?"' ERR
+APP="Caddy"
+var_tags="${var_tags:-webserver}"
+var_cpu="${var_cpu:-1}"
+var_ram="${var_ram:-512}"
+var_disk="${var_disk:-6}"
+var_os="${var_os:-debian}"
+var_version="${var_version:-12}"
+var_unprivileged="${var_unprivileged:-1}"
 
-function header_info() {
-  clear
-  cat <<"EOF"
-  ______      _ __                __
- /_  __/___ _(_) /_____________ _/ /__
-  / / / __ `/ / / ___/ ___/ __ `/ / _ \
- / / / /_/ / / (__  ) /__/ /_/ / /  __/
-/_/  \__,_/_/_/____/\___/\__,_/_/\___/
+header_info "$APP"
+variables
+color
+catch_errors
 
-EOF
+function update_script() {
+  header_info
+  check_container_storage
+  check_container_resources
+  if [[ ! -d /etc/caddy ]]; then
+    msg_error "No ${APP} Installation Found!"
+    exit
+  fi
+  msg_info "Updating $APP LXC"
+  $STD apt-get update
+  $STD apt-get -y upgrade
+  msg_ok "Updated successfully!"
+  msg_ok "Updated $APP LXC"
+
+  if command -v xcaddy >/dev/null 2>&1; then
+    setup_go
+    msg_info "Updating xCaddy"
+    cd /opt
+    RELEASE=$(curl -fsSL https://api.github.com/repos/caddyserver/xcaddy/releases/latest | grep "tag_name" | awk -F '"' '{print $4}')
+    VERSION="${RELEASE#v}"
+    curl -fsSL "https://github.com/caddyserver/xcaddy/releases/download/${RELEASE}/xcaddy_${VERSION}_linux_amd64.deb" -o "xcaddy_${VERSION}_linux_amd64.deb"
+    $STD dpkg -i "xcaddy_${VERSION}_linux_amd64.deb"
+    rm -f "xcaddy_${VERSION}_linux_amd64.deb"
+    $STD xcaddy build
+    msg_ok "Updated xCaddy"
+    msg_ok "Updated successfully!"
+  fi
+  exit
 }
 
-function msg_info() { echo -e " \e[1;36m➤\e[0m $1"; }
-function msg_ok() { echo -e " \e[1;32m✔\e[0m $1"; }
-function msg_error() { echo -e " \e[1;31m✖\e[0m $1"; }
+start
+build_container
+description
 
-header_info
-
-if ! command -v pveversion &>/dev/null; then
-  msg_error "This script must be run on the Proxmox VE host (not inside an LXC container)"
-  exit 1
-fi
-
-while true; do
-  read -rp "This will add Tailscale to an existing LXC Container ONLY. Proceed (y/n)? " yn
-  case "$yn" in
-  [Yy]*) break ;;
-  [Nn]*) exit 0 ;;
-  *) echo "Please answer yes or no." ;;
-  esac
-done
-
-header_info
-msg_info "Loading container list..."
-
-NODE=$(hostname)
-MSG_MAX_LENGTH=0
-CTID_MENU=()
-
-while read -r line; do
-  TAG=$(echo "$line" | awk '{print $1}')
-  ITEM=$(echo "$line" | awk '{print substr($0,36)}')
-  OFFSET=2
-  ((${#ITEM} + OFFSET > MSG_MAX_LENGTH)) && MSG_MAX_LENGTH=$((${#ITEM} + OFFSET))
-  CTID_MENU+=("$TAG" "$ITEM" "OFF")
-done < <(pct list | awk 'NR>1')
-
-CTID=""
-while [[ -z "${CTID}" ]]; do
-  CTID=$(whiptail --backtitle "Proxmox VE Helper Scripts" --title "Containers on $NODE" --radiolist \
-    "\nSelect a container to add Tailscale to:\n" \
-    16 $((MSG_MAX_LENGTH + 23)) 6 \
-    "${CTID_MENU[@]}" 3>&1 1>&2 2>&3) || exit 1
-done
-
-CTID_CONFIG_PATH="/etc/pve/lxc/${CTID}.conf"
-
-# Skip if already configured
-grep -q "lxc.cgroup2.devices.allow: c 10:200 rwm" "$CTID_CONFIG_PATH" || echo "lxc.cgroup2.devices.allow: c 10:200 rwm" >>"$CTID_CONFIG_PATH"
-grep -q "lxc.mount.entry: /dev/net/tun" "$CTID_CONFIG_PATH" || echo "lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file" >>"$CTID_CONFIG_PATH"
-
-header_info
-msg_info "Installing Tailscale in CT $CTID"
-
-pct exec "$CTID" -- bash -c '
-set -e
-export DEBIAN_FRONTEND=noninteractive
-
-ID=$(grep "^ID=" /etc/os-release | cut -d"=" -f2)
-VER=$(grep "^VERSION_CODENAME=" /etc/os-release | cut -d"=" -f2)
-
-# fallback if DNS is poisoned or blocked
-ORIG_RESOLV="/etc/resolv.conf"
-BACKUP_RESOLV="/tmp/resolv.conf.backup"
-
-if ! dig +short pkgs.tailscale.com | grep -qvE "^127\.|^0\.0\.0\.0$"; then
-  echo "[INFO] DNS resolution for pkgs.tailscale.com failed (blocked or redirected)."
-  echo "[INFO] Temporarily overriding /etc/resolv.conf with Cloudflare DNS (1.1.1.1)"
-  cp "$ORIG_RESOLV" "$BACKUP_RESOLV"
-  echo "nameserver 1.1.1.1" >"$ORIG_RESOLV"
-fi
-
-curl -fsSL https://pkgs.tailscale.com/stable/${ID}/${VER}.noarmor.gpg \
-  | tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
-
-echo "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/${ID} ${VER} main" \
-  >/etc/apt/sources.list.d/tailscale.list
-
-apt-get update -qq
-apt-get install -y tailscale >/dev/null
-
-if [[ -f /tmp/resolv.conf.backup ]]; then
-  echo "[INFO] Restoring original /etc/resolv.conf"
-  mv /tmp/resolv.conf.backup /etc/resolv.conf
-fi
-
-# -----------------------------
-# Enable IP forwarding (IPv4 + IPv6)
-# -----------------------------
-echo "[INFO] Enabling IPv4 and IPv6 forwarding..."
-sed -i "s/^#\?net.ipv4.ip_forward=.*/net.ipv4.ip_forward=1/" /etc/sysctl.conf
-sed -i "s/^#\?net.ipv6.conf.all.forwarding=.*/net.ipv6.conf.all.forwarding=1/" /etc/sysctl.conf
-
-# Apply the changes immediately
-sysctl -p >/dev/null
-echo "[INFO] sysctl settings updated."
-'
-
-TAGS=$(awk -F': ' '/^tags:/ {print $2}' "$CTID_CONFIG_PATH")
-TAGS="${TAGS:+$TAGS; }tailscale"
-pct set "$CTID" -tags "$TAGS"
-
-msg_ok "Tailscale installed on CT $CTID"
-msg_info "Reboot the container, then run 'tailscale up' inside the container to activate."
+msg_ok "Completed Successfully!\n"
+echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
+echo -e "${INFO}${YW} Access it using the following URL:${CL}"
+echo -e "${TAB}${GATEWAY}${BGN}http://${IP}:80${CL}"
